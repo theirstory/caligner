@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Word Timing Alignment Tool</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .input-section {
+            margin-bottom: 30px;
+        }
+        
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #555;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            resize: vertical;
+        }
+        
+        .file-input-wrapper {
+            margin-bottom: 20px;
+        }
+        
+        input[type="file"] {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            background: white;
+        }
+        
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .output-section {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid #eee;
+        }
+        
+        #output {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .stats {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+        }
+        
+        .error {
+            color: #dc3545;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8d7da;
+            border-radius: 4px;
+        }
+        
+        .success {
+            color: #155724;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #d4edda;
+            border-radius: 4px;
+        }
+        
+        .alignment-visualization {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .word-aligned {
+            background-color: #28a745;
+            color: white;
+            padding: 2px 4px;
+            margin: 1px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+        
+        .word-inserted {
+            background-color: #ffc107;
+            color: #333;
+            padding: 2px 4px;
+            margin: 1px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+        
+        .word-deleted {
+            background-color: #dc3545;
+            color: white;
+            padding: 2px 4px;
+            margin: 1px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Word Timing Alignment Tool</h1>
+        
+        <div class="input-section">
+            <label for="timedHtml">Timed Transcript (HTML with data-m and data-d attributes):</label>
+            <textarea id="timedHtml" placeholder='Paste HTML like: <p><span data-m="52890" data-d="90">I </span>...</p>'></textarea>
+        </div>
+        
+        <div class="input-section">
+            <label for="plainText">Plain Text Transcript (or upload file):</label>
+            <div class="file-input-wrapper">
+                <input type="file" id="fileInput" accept=".txt">
+            </div>
+            <textarea id="plainText" placeholder="Enter plain text transcript or upload a .txt file"></textarea>
+        </div>
+        
+        <button onclick="alignTranscripts()">Align Transcripts</button>
+        <button onclick="clearAll()">Clear All</button>
+        
+        <div id="errorMessage"></div>
+        
+        <div class="output-section" id="outputSection" style="display: none;">
+            <h2>Aligned Output</h2>
+            <div id="alignmentVisualization" class="alignment-visualization"></div>
+            <div id="output"></div>
+            <div id="stats" class="stats"></div>
+        </div>
+    </div>
+
+    <script>
+        // File input handler
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('plainText').value = e.target.result;
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        // Extract words and timings from HTML
+        // This function parses the input HTML and extracts:
+        // 1. The text content of each span (the words)
+        // 2. The timing attributes (data-m for start time, data-d for duration)
+        function extractTimedWords(html) {
+            // Use browser's built-in HTML parser
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            
+            // Find all spans with timing attributes
+            // Expected format: <span data-m="52890" data-d="90">I </span>
+            const spans = doc.querySelectorAll('span[data-m][data-d]');
+            
+            const words = [];
+            const timings = [];
+            
+            spans.forEach(span => {
+                // Extract and trim the word (removes extra spaces)
+                const word = span.textContent.trim();
+                if (word) {
+                    words.push(word);
+                    
+                    // Parse timing attributes
+                    // data-m: start time in milliseconds
+                    // data-d: duration in milliseconds
+                    const start = parseInt(span.getAttribute('data-m'));
+                    const duration = parseInt(span.getAttribute('data-d'));
+                    
+                    // Store timing info with calculated end time
+                    timings.push({ 
+                        start, 
+                        duration, 
+                        end: start + duration 
+                    });
+                }
+            });
+            
+            return { words, timings };
+        }
+
+        // Helper function to strip punctuation from word endings
+        // This ensures "minute," matches with "minute" and "happen." matches with "happen"
+        function stripPunctuation(word) {
+            // Remove common punctuation from the end of words
+            // This regex matches one or more punctuation characters at the end of the string
+            return word.replace(/[.,!?;:'"]+$/, '');
+        }
+
+        // Better word alignment that handles reordering
+        // This algorithm finds the best mapping between source words (with timings) 
+        // and target words (corrected transcript)
+        function alignWords(sourceWords, targetWords) {
+            // STEP 1: CREATE WORD FREQUENCY MAPS
+            // These maps help us handle duplicate words and find all occurrences
+            // Example: "the" might appear multiple times in both transcripts
+            const sourceWordMap = new Map();  // word -> [index1, index2, ...]
+            const targetWordMap = new Map();  // word -> [index1, index2, ...]
+            
+            // Build frequency maps (using stripped words for comparison)
+            // Source example: ["I", "think", "minute,"] 
+            // Creates map: {"i" -> [0], "think" -> [1], "minute" -> [2]}
+            sourceWords.forEach((word, idx) => {
+                const key = stripPunctuation(word.toLowerCase());
+                if (!sourceWordMap.has(key)) {
+                    sourceWordMap.set(key, []);
+                }
+                sourceWordMap.get(key).push(idx);
+            });
+            
+            targetWords.forEach((word, idx) => {
+                const key = stripPunctuation(word.toLowerCase());
+                if (!targetWordMap.has(key)) {
+                    targetWordMap.set(key, []);
+                }
+                targetWordMap.get(key).push(idx);
+            });
+            
+            // STEP 2: TRACK ALIGNMENT STATE
+            const usedSourceIndices = new Set();  // Which source words we've already matched
+            const targetAlignment = new Array(targetWords.length).fill(null);  // Maps target index -> source index
+            
+            // STEP 3: FIRST PASS - IN-ORDER MATCHING
+            // This pass tries to maintain word order when possible
+            // It's important for handling sentences where most words are in the same order
+            //
+            // Visual example:
+            // Source: "I think unfortunately at the minute"
+            // Target: "So I think that unfortunately the minute"
+            //         
+            // Pass 1 will match: I->I, think->think, minute->minute (in order)
+            let lastSourceIdx = -1;  // Tracks the last matched source position
+            
+            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
+                const targetWord = stripPunctuation(targetWords[targetIdx].toLowerCase());
+                
+                if (sourceWordMap.has(targetWord)) {
+                    const sourceIndices = sourceWordMap.get(targetWord);
+                    
+                    // Find the best source index (closest to expected position)
+                    // We prefer indices that come after our last match to maintain order
+                    let bestSourceIdx = null;
+                    for (const sourceIdx of sourceIndices) {
+                        if (!usedSourceIndices.has(sourceIdx) && sourceIdx > lastSourceIdx) {
+                            bestSourceIdx = sourceIdx;
+                            break;  // Take the first valid one
+                        }
+                    }
+                    
+                    if (bestSourceIdx !== null) {
+                        targetAlignment[targetIdx] = bestSourceIdx;
+                        usedSourceIndices.add(bestSourceIdx);
+                        lastSourceIdx = bestSourceIdx;
+                    }
+                }
+            }
+            
+            // STEP 4: SECOND PASS - OUT-OF-ORDER MATCHING
+            // This handles words that moved positions in the sentence
+            // Example: "unfortunately" might have moved from position 2 to position 4
+            //
+            // Visual example after Pass 1:
+            // Target: "So I think that unfortunately the minute"
+            //         X  ✓   ✓    X      ?       ✓    ✓
+            //
+            // Pass 2 will now match: unfortunately->unfortunately (out of order)
+            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
+                if (targetAlignment[targetIdx] === null) {  // Not matched in first pass
+                    const targetWord = stripPunctuation(targetWords[targetIdx].toLowerCase());
+                    
+                    if (sourceWordMap.has(targetWord)) {
+                        const sourceIndices = sourceWordMap.get(targetWord);
+                        
+                        // Find any unused source index (order doesn't matter now)
+                        for (const sourceIdx of sourceIndices) {
+                            if (!usedSourceIndices.has(sourceIdx)) {
+                                targetAlignment[targetIdx] = sourceIdx;
+                                usedSourceIndices.add(sourceIdx);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // STEP 5: BUILD FINAL ALIGNMENT STRUCTURE
+            // Convert our mapping into a list of alignment operations
+            const alignment = [];
+            
+            // Add all matched and inserted words
+            // Each target word is either:
+            // - Matched to a source word (has timing)
+            // - Inserted (new word, needs interpolated timing)
+            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
+                const sourceIdx = targetAlignment[targetIdx];
+                if (sourceIdx !== null) {
+                    alignment.push({ 
+                        type: 'match', 
+                        sourceIdx: sourceIdx, 
+                        targetIdx: targetIdx 
+                    });
+                } else {
+                    alignment.push({ 
+                        type: 'insert', 
+                        sourceIdx: null, 
+                        targetIdx: targetIdx 
+                    });
+                }
+            }
+            
+            // Add deleted words (words in source but not in target)
+            // Example: "at" appears in source but not in corrected transcript
+            for (let sourceIdx = 0; sourceIdx < sourceWords.length; sourceIdx++) {
+                if (!usedSourceIndices.has(sourceIdx)) {
+                    alignment.push({ 
+                        type: 'delete', 
+                        sourceIdx: sourceIdx, 
+                        targetIdx: null 
+                    });
+                }
+            }
+            
+            // Sort alignment by target index (with deletes at the end)
+            // This ensures we process the alignment in the order of the target transcript
+            alignment.sort((a, b) => {
+                if (a.targetIdx === null) return 1;   // Deletes go to end
+                if (b.targetIdx === null) return -1;  // Deletes go to end
+                return a.targetIdx - b.targetIdx;     // Others sorted by target position
+            });
+            
+            return alignment;
+        }
+
+        // Main alignment function
+        function alignTranscripts() {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.innerHTML = '';
+            
+            try {
+                // Get inputs
+                const timedHtml = document.getElementById('timedHtml').value.trim();
+                const plainText = document.getElementById('plainText').value.trim();
+                
+                if (!timedHtml || !plainText) {
+                    throw new Error('Please provide both timed HTML and plain text transcript');
+                }
+                
+                // Extract words and timings from HTML
+                const { words: sourceWords, timings } = extractTimedWords(timedHtml);
+                
+                if (sourceWords.length === 0) {
+                    throw new Error('No words found in HTML. Make sure spans have data-m and data-d attributes');
+                }
+                
+                // Split plain text into words
+                const targetWords = plainText.split(/\s+/).filter(w => w.length > 0);
+                
+                // Align words
+                const alignment = alignWords(sourceWords, targetWords);
+                
+                // Generate output
+                const output = [];
+                const alignmentVis = [];
+                let lastTiming = null;
+                
+                alignment.forEach((align, idx) => {
+                    if (align.type === 'match') {
+                        const timing = timings[align.sourceIdx];
+                        output.push({
+                            word: targetWords[align.targetIdx],
+                            start: timing.start,
+                            duration: timing.duration
+                        });
+                        lastTiming = timing;
+                        alignmentVis.push({
+                            type: 'aligned',
+                            source: sourceWords[align.sourceIdx],
+                            target: targetWords[align.targetIdx],
+                            sourceIdx: align.sourceIdx
+                        });
+                    } else if (align.type === 'insert') {
+                        // Find next timing
+                        let nextTiming = null;
+                        for (let i = idx + 1; i < alignment.length; i++) {
+                            if (alignment[i].type === 'match' || alignment[i].type === 'substitute') {
+                                nextTiming = timings[alignment[i].sourceIdx];
+                                break;
+                            }
+                        }
+                        
+                        // Use next timing, or last timing if no next
+                        const timing = nextTiming || lastTiming;
+                        if (timing) {
+                            output.push({
+                                word: targetWords[align.targetIdx],
+                                start: timing.start,
+                                duration: timing.duration
+                            });
+                        }
+                        alignmentVis.push({
+                            type: 'inserted',
+                            target: targetWords[align.targetIdx]
+                        });
+                    } else if (align.type === 'delete') {
+                        alignmentVis.push({
+                            type: 'deleted',
+                            source: sourceWords[align.sourceIdx]
+                        });
+                    }
+                });
+                
+                // Display results
+                displayOutput(output);
+                displayAlignment(alignmentVis);
+                displayStats(sourceWords.length, targetWords.length, alignment);
+                
+            } catch (error) {
+                errorDiv.innerHTML = `<div class="error">${error.message}</div>`;
+            }
+        }
+
+        function displayOutput(output) {
+            const outputDiv = document.getElementById('output');
+            const outputSection = document.getElementById('outputSection');
+            
+            // Generate HTML output
+            let html = '<p>\n';
+            output.forEach(item => {
+                html += `  <span data-m="${item.start}" data-d="${item.duration}">${item.word} </span>\n`;
+            });
+            html += '</p>';
+            
+            outputDiv.textContent = html;
+            outputSection.style.display = 'block';
+        }
+
+        function displayAlignment(alignmentVis) {
+            const visDiv = document.getElementById('alignmentVisualization');
+            let html = '<strong>Alignment Visualization:</strong><br>';
+            
+            alignmentVis.forEach(item => {
+                if (item.type === 'aligned') {
+                    html += `<span class="word-aligned">${item.source}[${item.sourceIdx}] → ${item.target}</span> `;
+                } else if (item.type === 'inserted') {
+                    html += `<span class="word-inserted">+ ${item.target}</span> `;
+                } else if (item.type === 'deleted') {
+                    html += `<span class="word-deleted">- ${item.source}</span> `;
+                }
+            });
+            
+            visDiv.innerHTML = html;
+        }
+
+        function displayStats(sourceCount, targetCount, alignment) {
+            const statsDiv = document.getElementById('stats');
+            const matches = alignment.filter(a => a.type === 'match').length;
+            const substitutions = alignment.filter(a => a.type === 'substitute').length;
+            const insertions = alignment.filter(a => a.type === 'insert').length;
+            const deletions = alignment.filter(a => a.type === 'delete').length;
+            
+            statsDiv.innerHTML = `
+                <strong>Alignment Statistics:</strong><br>
+                Source words: ${sourceCount}<br>
+                Target words: ${targetCount}<br>
+                Exact matches: ${matches}<br>
+                Substitutions: ${substitutions}<br>
+                Insertions: ${insertions}<br>
+                Deletions: ${deletions}
+            `;
+        }
+
+        function clearAll() {
+            document.getElementById('timedHtml').value = '';
+            document.getElementById('plainText').value = '';
+            document.getElementById('fileInput').value = '';
+            document.getElementById('outputSection').style.display = 'none';
+            document.getElementById('errorMessage').innerHTML = '';
+        }
+    </script>
+</body>
+</html>
