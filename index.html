@@ -242,239 +242,65 @@
             return { words, timings };
         }
 
-        // Helper function to strip punctuation from word endings
-        // This ensures "minute," matches with "minute" and "happen." matches with "happen"
-        function stripPunctuation(word) {
-            // Remove common punctuation from the end of words
-            // This regex matches one or more punctuation characters at the end of the string
-            return word.replace(/[.,!?;:'"]+$/, '');
-        }
-        
-        // Helper function to normalize word for comparison (lowercase + strip punctuation)
-        // This ensures "Minute," matches with "minute" and "HAPPEN." matches with "happen"
-        function normalizeWord(word) {
-            return stripPunctuation(word.toLowerCase());
-        }
-
-        // Better word alignment that handles reordering and substitutions
-        // This algorithm finds the best mapping between source words (with timings) 
-        // and target words (corrected transcript)
+        // Simple word alignment using edit distance
         function alignWords(sourceWords, targetWords) {
-            // STEP 1: CREATE WORD FREQUENCY MAPS
-            // These maps help us handle duplicate words and find all occurrences
-            // Example: "the" might appear multiple times in both transcripts
-            const sourceWordMap = new Map();  // word -> [index1, index2, ...]
-            const targetWordMap = new Map();  // word -> [index1, index2, ...]
+            const m = sourceWords.length;
+            const n = targetWords.length;
             
-            // Build frequency maps (using normalized words for comparison)
-            // Source example: ["I", "think", "Minute,"] 
-            // Creates map: {"i" -> [0], "think" -> [1], "minute" -> [2]}
-            sourceWords.forEach((word, idx) => {
-                const key = normalizeWord(word);  // Lowercase + strip punctuation
-                if (!sourceWordMap.has(key)) {
-                    sourceWordMap.set(key, []);
-                }
-                sourceWordMap.get(key).push(idx);
-            });
+            // Create DP table
+            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
             
-            targetWords.forEach((word, idx) => {
-                const key = normalizeWord(word);  // Lowercase + strip punctuation
-                if (!targetWordMap.has(key)) {
-                    targetWordMap.set(key, []);
-                }
-                targetWordMap.get(key).push(idx);
-            });
+            // Initialize base cases
+            for (let i = 0; i <= m; i++) dp[i][0] = i;
+            for (let j = 0; j <= n; j++) dp[0][j] = j;
             
-            // STEP 2: TRACK ALIGNMENT STATE
-            const usedSourceIndices = new Set();  // Which source words we've already matched
-            const targetAlignment = new Array(targetWords.length).fill(null);  // Maps target index -> source index
-            
-            // STEP 3: FIRST PASS - IN-ORDER MATCHING
-            // This pass tries to maintain word order when possible
-            // It's important for handling sentences where most words are in the same order
-            //
-            // Visual example:
-            // Source: "I think unfortunately at the minute"
-            // Target: "So I think that unfortunately the minute"
-            //         
-            // Pass 1 will match: I->I, think->think, minute->minute (in order)
-            let lastSourceIdx = -1;  // Tracks the last matched source position
-            
-            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
-                const targetWord = normalizeWord(targetWords[targetIdx]);  // Normalize for comparison
-                
-                if (sourceWordMap.has(targetWord)) {
-                    const sourceIndices = sourceWordMap.get(targetWord);
-                    
-                    // Find the best source index (closest to expected position)
-                    // We prefer indices that come after our last match to maintain order
-                    let bestSourceIdx = null;
-                    for (const sourceIdx of sourceIndices) {
-                        if (!usedSourceIndices.has(sourceIdx) && sourceIdx > lastSourceIdx) {
-                            bestSourceIdx = sourceIdx;
-                            break;  // Take the first valid one
-                        }
-                    }
-                    
-                    if (bestSourceIdx !== null) {
-                        targetAlignment[targetIdx] = bestSourceIdx;
-                        usedSourceIndices.add(bestSourceIdx);
-                        lastSourceIdx = bestSourceIdx;
+            // Fill DP table
+            for (let i = 1; i <= m; i++) {
+                for (let j = 1; j <= n; j++) {
+                    if (sourceWords[i-1].toLowerCase() === targetWords[j-1].toLowerCase()) {
+                        dp[i][j] = dp[i-1][j-1];
+                    } else {
+                        dp[i][j] = Math.min(
+                            dp[i-1][j-1] + 1,  // substitute
+                            dp[i-1][j] + 1,    // delete
+                            dp[i][j-1] + 1     // insert
+                        );
                     }
                 }
             }
             
-            // STEP 4: SECOND PASS - OUT-OF-ORDER MATCHING
-            // This handles words that moved positions in the sentence
-            // Example: "unfortunately" might have moved from position 2 to position 4
-            //
-            // Visual example after Pass 1:
-            // Target: "So I think that unfortunately the minute"
-            //         X  ✓   ✓    X      ?       ✓    ✓
-            //
-            // Pass 2 will now match: unfortunately->unfortunately (out of order)
-            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
-                if (targetAlignment[targetIdx] === null) {  // Not matched in first pass
-                    const targetWord = normalizeWord(targetWords[targetIdx]);  // Normalize for comparison
-                    
-                    if (sourceWordMap.has(targetWord)) {
-                        const sourceIndices = sourceWordMap.get(targetWord);
-                        
-                        // Find any unused source index (order doesn't matter now)
-                        for (const sourceIdx of sourceIndices) {
-                            if (!usedSourceIndices.has(sourceIdx)) {
-                                targetAlignment[targetIdx] = sourceIdx;
-                                usedSourceIndices.add(sourceIdx);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // STEP 5: HANDLE SUBSTITUTION GROUPS
-            // Find groups of consecutive unmatched words that might be substitutions
-            // Example: "people aware" -> "sheep a bear" should be treated as a substitution group
-            const substitutionGroups = [];
-            let currentUnmatchedGroup = [];
-            
-            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
-                if (targetAlignment[targetIdx] === null) {
-                    currentUnmatchedGroup.push(targetIdx);
-                } else {
-                    if (currentUnmatchedGroup.length > 0) {
-                        substitutionGroups.push([...currentUnmatchedGroup]);
-                        currentUnmatchedGroup = [];
-                    }
-                }
-            }
-            if (currentUnmatchedGroup.length > 0) {
-                substitutionGroups.push(currentUnmatchedGroup);
-            }
-            
-            // For each substitution group, find nearby unused source words
-            substitutionGroups.forEach(group => {
-                // Find the context (previous and next matched words)
-                let prevMatchedIdx = -1;
-                let nextMatchedIdx = targetWords.length;
-                
-                for (let i = group[0] - 1; i >= 0; i--) {
-                    if (targetAlignment[i] !== null) {
-                        prevMatchedIdx = targetAlignment[i];
-                        break;
-                    }
-                }
-                
-                for (let i = group[group.length - 1] + 1; i < targetWords.length; i++) {
-                    if (targetAlignment[i] !== null) {
-                        nextMatchedIdx = targetAlignment[i];
-                        break;
-                    }
-                }
-                
-                // Find unused source words in the range
-                const unusedInRange = [];
-                for (let sourceIdx = prevMatchedIdx + 1; sourceIdx < nextMatchedIdx && sourceIdx < sourceWords.length; sourceIdx++) {
-                    if (!usedSourceIndices.has(sourceIdx)) {
-                        unusedInRange.push(sourceIdx);
-                    }
-                }
-                
-                // Map the substitution group to the unused source words
-                if (unusedInRange.length > 0) {
-                    // Case 1: Same number of words - one-to-one mapping
-                    if (unusedInRange.length === group.length) {
-                        for (let i = 0; i < group.length; i++) {
-                            targetAlignment[group[i]] = unusedInRange[i];
-                            usedSourceIndices.add(unusedInRange[i]);
-                        }
-                    }
-                    // Case 2: Fewer target words than source - skip some source timings
-                    else if (unusedInRange.length > group.length) {
-                        for (let i = 0; i < group.length; i++) {
-                            targetAlignment[group[i]] = unusedInRange[i];
-                            usedSourceIndices.add(unusedInRange[i]);
-                        }
-                    }
-                    // Case 3: More target words than source - reuse timings
-                    else {
-                        for (let i = 0; i < group.length; i++) {
-                            const sourceIdx = unusedInRange[Math.min(i, unusedInRange.length - 1)];
-                            targetAlignment[group[i]] = sourceIdx;
-                            // Don't mark as used if we're reusing it
-                            if (i < unusedInRange.length) {
-                                usedSourceIndices.add(sourceIdx);
-                            }
-                        }
-                    }
-                }
-            });
-            
-            // STEP 6: BUILD FINAL ALIGNMENT STRUCTURE
-            // Convert our mapping into a list of alignment operations
+            // Backtrack to find alignment
             const alignment = [];
+            let i = m, j = n;
             
-            // Add all matched and inserted words
-            // Each target word is either:
-            // - Matched to a source word (has timing)
-            // - Inserted (new word, needs interpolated timing)
-            for (let targetIdx = 0; targetIdx < targetWords.length; targetIdx++) {
-                const sourceIdx = targetAlignment[targetIdx];
-                if (sourceIdx !== null) {
-                    alignment.push({ 
-                        type: 'match', 
-                        sourceIdx: sourceIdx, 
-                        targetIdx: targetIdx 
-                    });
+            while (i > 0 || j > 0) {
+                if (i === 0) {
+                    alignment.push({ type: 'insert', sourceIdx: null, targetIdx: j-1 });
+                    j--;
+                } else if (j === 0) {
+                    alignment.push({ type: 'delete', sourceIdx: i-1, targetIdx: null });
+                    i--;
                 } else {
-                    alignment.push({ 
-                        type: 'insert', 
-                        sourceIdx: null, 
-                        targetIdx: targetIdx 
-                    });
+                    const current = dp[i][j];
+                    if (sourceWords[i-1].toLowerCase() === targetWords[j-1].toLowerCase()) {
+                        alignment.push({ type: 'match', sourceIdx: i-1, targetIdx: j-1 });
+                        i--;
+                        j--;
+                    } else if (current === dp[i-1][j-1] + 1) {
+                        alignment.push({ type: 'substitute', sourceIdx: i-1, targetIdx: j-1 });
+                        i--;
+                        j--;
+                    } else if (current === dp[i-1][j] + 1) {
+                        alignment.push({ type: 'delete', sourceIdx: i-1, targetIdx: null });
+                        i--;
+                    } else {
+                        alignment.push({ type: 'insert', sourceIdx: null, targetIdx: j-1 });
+                        j--;
+                    }
                 }
             }
             
-            // Add deleted words (words in source but not in target)
-            // Example: "at" appears in source but not in corrected transcript
-            for (let sourceIdx = 0; sourceIdx < sourceWords.length; sourceIdx++) {
-                if (!usedSourceIndices.has(sourceIdx)) {
-                    alignment.push({ 
-                        type: 'delete', 
-                        sourceIdx: sourceIdx, 
-                        targetIdx: null 
-                    });
-                }
-            }
-            
-            // Sort alignment by target index (with deletes at the end)
-            // This ensures we process the alignment in the order of the target transcript
-            alignment.sort((a, b) => {
-                if (a.targetIdx === null) return 1;   // Deletes go to end
-                if (b.targetIdx === null) return -1;  // Deletes go to end
-                return a.targetIdx - b.targetIdx;     // Others sorted by target position
-            });
-            
+            alignment.reverse();
             return alignment;
         }
 
@@ -511,7 +337,7 @@
                 let lastTiming = null;
                 
                 alignment.forEach((align, idx) => {
-                    if (align.type === 'match') {
+                    if (align.type === 'match' || align.type === 'substitute') {
                         const timing = timings[align.sourceIdx];
                         output.push({
                             word: targetWords[align.targetIdx],
@@ -522,8 +348,7 @@
                         alignmentVis.push({
                             type: 'aligned',
                             source: sourceWords[align.sourceIdx],
-                            target: targetWords[align.targetIdx],
-                            sourceIdx: align.sourceIdx
+                            target: targetWords[align.targetIdx]
                         });
                     } else if (align.type === 'insert') {
                         // Find next timing
@@ -587,7 +412,7 @@
             
             alignmentVis.forEach(item => {
                 if (item.type === 'aligned') {
-                    html += `<span class="word-aligned">${item.source}[${item.sourceIdx}] → ${item.target}</span> `;
+                    html += `<span class="word-aligned">${item.source} → ${item.target}</span> `;
                 } else if (item.type === 'inserted') {
                     html += `<span class="word-inserted">+ ${item.target}</span> `;
                 } else if (item.type === 'deleted') {
