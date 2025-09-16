@@ -1,5 +1,7 @@
 # caligner
-An experimental aligner that creates a timed transcript given a corrected transcript and a raw STT generated transcript with word timings
+An experimental aligner that creates a timed transcript given a corrected transcript and a raw STT generated transcript with word timings.
+
+Try it out here [https://theirstory.github.io/caligner/](https://theirstory.github.io/caligner/)
 
 
 Example 1:
